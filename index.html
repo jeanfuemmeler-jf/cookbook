@@ -352,5 +352,27 @@ renderTabs(); renderList(); renderDetail();
 // Try auto‑pull/merge on load (non‑blocking)
 autoPullMerge();
 </script>
+  <script>
+// Try to load recipes.json automatically from GitHub repo
+async function loadRecipesFromGitHub() {
+  try {
+    const response = await fetch("https://raw.githubusercontent.com/jeanfuemmeler-jf/cookbook/main/recipes.json");
+    if (response.ok) {
+      const data = await response.json();
+      localStorage.setItem("RECIPES", JSON.stringify(data));
+      location.reload(); // refresh so recipes appear
+    }
+  } catch (err) {
+    console.error("Could not load recipes.json from GitHub:", err);
+  }
+}
+
+// Run on first visit (only if no recipes in localStorage yet)
+if (!localStorage.getItem("RECIPES")) {
+  loadRecipesFromGitHub();
+}
+</script>
+
 </body>
 </html>
+
