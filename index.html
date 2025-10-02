@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>My Cookbook — Master–Detail (Editable + Auto-Sync)</title>
+<title>My Cookbook — Master–Detail (Editable + Auto-Sync + Videos)</title>
 <style>
   :root{--bg:#0f1115;--panel:#12151c;--card:#171a21;--text:#e9edf1;--muted:#9aa7b6;--accent:#4da3ff;--line:#262b35}
   *{box-sizing:border-box} body{margin:0;font:16px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:var(--text)}
@@ -54,7 +54,7 @@
   <header>
     <div style="display:flex;align-items:center;gap:10px">
       <h1>My Cookbook</h1>
-      <span class="badge">Sidebar list → Full-width • Add/Edit • Checklists • Butter→TBSP • Timers • Auto-Sync</span>
+      <span class="badge">Sidebar list → Full-width • Add/Edit • Checklists • Butter→TBSP • Timers • Auto-Sync • Videos</span>
     </div>
     <div class="toolbar">
       <button id="btn-import">Import JSON</button>
@@ -117,6 +117,11 @@
         <textarea id="e-ings" rows="8" class="grow" placeholder="1/2 cup butter&#10;2 eggs&#10;1 tsp salt"></textarea></div>
       <div><label class="small">Steps (one per line)</label>
         <textarea id="e-steps" rows="8" class="grow" placeholder="Preheat oven to 350°F&#10;Stir 3 min until glossy&#10;Bake 10-12 min"></textarea></div>
+      <!-- NEW: video links -->
+      <div style="grid-column:1/-1">
+        <label class="small">Video links (one per line — YouTube, TikTok, Vimeo)</label>
+        <textarea id="e-videos" rows="4" class="grow" placeholder="https://www.youtube.com/watch?v=XXXXXXX&#10;https://www.tiktok.com/@user/video/1234567890"></textarea>
+      </div>
       <div style="grid-column:1/-1">
         <label class="small">Quick paste (optional)</label>
         <textarea id="e-paste" rows="6" class="grow" placeholder="Paste any recipe text here; the parser will try to split into Ingredients and Steps."></textarea>
@@ -149,13 +154,70 @@ let GH_GIST  = localStorage.getItem('cookbook.gh.gist')  || '';
 const norm=s=>String(s||"").trim();
 const sameCat=(a,b)=>norm(a).toLowerCase()===norm(b).toLowerCase();
 const uid=()=>Math.random().toString(36).slice(2)+Date.now().toString(36);
+function escapeHtml(s){return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]))}
 
-// Butter → TBSP and stir timers
+/* ====== Conversions & timers ====== */
 function toTbsp(amount, unit){const u=unit.toLowerCase(); if(u.includes('tbsp')||u==='tbs'||u==='tbl')return{tbsp:amount}; if(u.includes('tsp'))return{tbsp:amount/3}; if(u.includes('cup'))return{tbsp:amount*16}; if(u.includes('stick'))return{tbsp:amount*8}; if(u.includes('g'))return{tbsp:amount/14.2,approx:true}; if(u.includes('oz'))return{tbsp:amount*2,approx:true}; return null}
 function parseAmount(text){const t=String(text).trim(); if(!t)return null; let m=t.match(/^(\d+)\s+(\d+)\/(\d+)$/); if(m){const w=+m[1],n=+m[2],d=+m[3]; if(d)return w+n/d} m=t.match(/^(\d+)\/(\d+)$/); if(m){const n=+m[1],d=+m[2]; if(d)return n/d} const num=Number(t); return Number.isFinite(num)?num:null}
 function butterBadge(line){const s=String(line).toLowerCase(); if(!/\bbutter\b/.test(s))return''; const m=s.match(/(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*(cups?|sticks?|tbsp|tbs|tbl|teaspoons?|tsp|grams?|g|oz)\b/); if(!m)return''; const amt=parseAmount(m[1]); if(amt==null)return''; const conv=toTbsp(amt,m[2]); if(!conv)return''; const tbsp=Math.round(conv.tbsp*100)/100; const approx=conv.approx?' ~':''; return `<span class="butter">${tbsp} tbsp${approx}</span>`}
 function parseStirSeconds(text){const m=String(text).toLowerCase().match(/stir[^\d]*(\d+(?:\.\d+)?)\s*(min|mins|minutes|sec|secs|seconds)\b/); if(!m)return 0; const val=parseFloat(m[1]); const unit=m[2]; return /min/.test(unit)?Math.round(val*60):Math.round(val)}
 function mmss(s){const m=Math.floor(s/60),sec=s%60; return `${m}:${String(sec).padStart(2,'0')}`}
+
+/* ====== Video helpers (YouTube + TikTok + Vimeo) ====== */
+function parseVideoIdYouTube(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1);
+    if (u.hostname.includes('youtube.com')) {
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/embed\/([A-Za-z0-9_-]{6,})/);
+      if (m) return m[1];
+    }
+  } catch {}
+  return null;
+}
+function parseVideoIdVimeo(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes('vimeo.com')) {
+      const m = u.pathname.match(/\/(\d+)/);
+      if (m) return m[1];
+    }
+  } catch {}
+  return null;
+}
+function isTikTok(url){
+  try{ const u=new URL(url); return u.hostname.includes('tiktok.com'); }catch{return false;}
+}
+function ensureTikTokScript(){
+  if(document.querySelector('script[data-tiktok-embed]')) return;
+  const s=document.createElement('script');
+  s.src='https://www.tiktok.com/embed.js';
+  s.async=true;
+  s.setAttribute('data-tiktok-embed','true');
+  document.body.appendChild(s);
+}
+function renderVideoEmbed(url) {
+  const yt = parseVideoIdYouTube(url);
+  if (yt) {
+    const src = `https://www.youtube.com/embed/${yt}`;
+    return `<div style="aspect-ratio:16/9"><iframe src="${src}" title="YouTube video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen style="width:100%;height:100%;border:0;border-radius:12px"></iframe></div>`;
+  }
+  if (isTikTok(url)) {
+    // TikTok: blockquote + embed script will transform it
+    const safe = escapeHtml(url);
+    return `<blockquote class="tiktok-embed" cite="${safe}" data-video-id="" style="max-width:605px;min-width:325px;margin:0">
+              <section><a href="${safe}" target="_blank" rel="noopener">View on TikTok</a></section>
+            </blockquote>`;
+  }
+  const vm = parseVideoIdVimeo(url);
+  if (vm) {
+    const src = `https://player.vimeo.com/video/${vm}`;
+    return `<div style="aspect-ratio:16/9"><iframe src="${src}" title="Vimeo video" allow="fullscreen; picture-in-picture" allowfullscreen style="width:100%;height:100%;border:0;border-radius:12px"></iframe></div>`;
+  }
+  // Fallback: plain link
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Open video</a>`;
+}
 
 /* ====== Renderers ====== */
 function renderTabs(){
@@ -178,8 +240,13 @@ function renderDetail(){
   const steps=(r.steps||[]).map((line,i)=>{
     const sec=parseStirSeconds(line);
     const timer=sec?`<button type="button" class="ghost" data-timer data-seconds="${sec}">Start</button>`:'';
-    return `${checkboxLine('step',i,line)} ${timer}`;
+    // auto-embed video if a link is inside the step
+    const urlMatch = String(line).match(/https?:\/\/\S+/);
+    let embed = '';
+    if (urlMatch) embed = `<div style="margin-top:8px">${renderVideoEmbed(urlMatch[0])}</div>`;
+    return `${checkboxLine('step',i,line)} ${timer} ${embed}`;
   }).join('');
+  const videos = (r.videos || []).map(u => `<li>${renderVideoEmbed(u)}</li>`).join('');
   const metaParts=[]; if(r.serves) metaParts.push(`Serves: ${escapeHtml(r.serves)}`); if(r.time) metaParts.push(`Total time: ${escapeHtml(r.time)}`);
   $detail.innerHTML=`
     <div class="detail-h">
@@ -189,6 +256,7 @@ function renderDetail(){
       </div>
       <div style="display:flex;gap:8px">
         <button class="ghost" id="btn-edit">Edit</button>
+        <button class="ghost" id="btn-add-video">Add video</button>
         <button class="ghost" id="btn-clear">I'm done</button>
         <button class="ghost" id="btn-del">Delete</button>
       </div>
@@ -196,11 +264,30 @@ function renderDetail(){
     <div class="detail-c">
       <div class="section"><h3>Ingredient checklist</h3><ul>${ings}</ul></div>
       <div class="section"><h3>Steps</h3><ol>${steps}</ol></div>
+      ${(r.videos && r.videos.length)
+        ? `<div class="section" style="grid-column:1/-1">
+             <h3>Videos</h3>
+             <ul style="list-style:none;padding-left:0">${videos}</ul>
+           </div>`
+        : ''
+      }
     </div>`;
   // delete
   byId('btn-del').addEventListener('click',async()=>{ RECIPES=RECIPES.filter(x=>x.id!==r.id); persist(); SELECTED=''; localStorage.setItem('cookbook.sel', SELECTED); renderTabs(); renderList(); renderDetail(); await autoPush(); });
   // edit
   byId('btn-edit').addEventListener('click',()=>openEditor(r));
+  // add video (prompt)
+  byId('btn-add-video').addEventListener('click', async () => {
+    const url = prompt('Paste a YouTube/TikTok/Vimeo link:');
+    if (!url) return;
+    const updated = { ...r, videos: [...(r.videos || []), url.trim()], updatedAt: new Date().toISOString() };
+    RECIPES = RECIPES.map(x => x.id === r.id ? updated : x);
+    persist();
+    renderDetail();
+    // ensure TikTok script is attached if needed
+    if (isTikTok(url)) ensureTikTokScript();
+    await autoPush();
+  });
   // clear all checkboxes
   const clearBtn = byId('btn-clear');
   if (clearBtn) {
@@ -217,11 +304,12 @@ function renderDetail(){
   $detail.querySelectorAll('[data-step]').forEach(cb=>{ cb.addEventListener('change',()=>{ cb.nextElementSibling.classList.toggle('muted', cb.checked); }); });
   // timers
   $detail.querySelectorAll('[data-timer]').forEach(btn=>{ let timer=null, left=+btn.dataset.seconds; const setTxt=()=>btn.textContent=`Stir ${mmss(left)}`; if(left>0){ setTxt(); btn.addEventListener('click',()=>{ if(timer){ clearInterval(timer); timer=null; btn.textContent='Resume'; } else { btn.textContent='Pause'; timer=setInterval(()=>{ if(left>0){ left--; setTxt(); } else { clearInterval(timer); timer=null; btn.textContent='Done'; } },1000); } }); } });
+  // if any TikTok embeds present, load script
+  if ($detail.querySelector('.tiktok-embed')) ensureTikTokScript();
 }
 function checkboxLine(kind, i, text){
   return `<li><label class="chk"><input type="checkbox" data-${kind} data-index="${i}"><span>${escapeHtml(text)}</span></label></li>`;
 }
-function escapeHtml(s){return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]))}
 
 /* ====== Editor (Add/Edit) ====== */
 function openEditor(recipe){
@@ -233,6 +321,7 @@ function openEditor(recipe){
   byId('e-time').value = recipe? (recipe.time||'') : '';
   byId('e-ings').value = recipe? (recipe.ingredients||[]).join('\n') : '';
   byId('e-steps').value = recipe? (recipe.steps||[]).join('\n') : '';
+  byId('e-videos').value = recipe ? (recipe.videos || []).join('\n') : '';
   byId('e-paste').value = '';
   $editor.showModal();
 }
@@ -246,6 +335,7 @@ async function saveRecipe(){
     time: byId('e-time').value||'',
     ingredients: byId('e-ings').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
     steps: byId('e-steps').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
+    videos: (byId('e-videos').value || '').split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
     updatedAt: now
   };
   if(EDITING_ID){ RECIPES = RECIPES.map(r => r.id===EDITING_ID ? data : r); }
@@ -329,19 +419,19 @@ async function loadRecipesFromGitHub() {
     if (Array.isArray(data)) {
       RECIPES = data;
       persist();
-      // if nothing selected, pick first in current tab
       if (!SELECTED && RECIPES.length) {
         const first = RECIPES.find(r=>sameCat(r.category,TAB)) || RECIPES[0];
         if (first) { SELECTED = first.id; localStorage.setItem('cookbook.sel', SELECTED); }
       }
       renderTabs(); renderList(); renderDetail();
+      // If any TikTok embeds appear after load, ensure script is present
+      if (document.querySelector('.tiktok-embed')) ensureTikTokScript();
     }
   } catch (e) {
     console.warn("GitHub recipes.json fetch failed (using local data).", e);
   }
 }
-loadRecipesFromGitHub(); // <- always refresh from GitHub
+loadRecipesFromGitHub(); // always refresh from GitHub
 </script>
 </body>
 </html>
-
